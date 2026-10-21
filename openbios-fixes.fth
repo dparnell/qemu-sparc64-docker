@@ -12,6 +12,21 @@
 \    node, so add the real-hardware style node for Solaris (see fix 3). OpenBIOS itself
 \    keeps booting through its own ide@0/disk@0.
 " /pci@1fe,0/pci@1,1/ide@3" find-device new-device " disk" device-name " block" device-type 0 encode-int 0 encode-int encode+ " reg" property " ide-disk" encode-string " compatible" property finish-device device-end
+\ 1e. The floppy node (fdthree) has a register specification Solaris rejects ("ebus:
+\    WARNING: Out of range register specification from device node <fdthree>"); fd's
+\    attach then fails and its cleanup dereferences NULL (panic in fd_cleanup). There is
+\    no floppy drive here; Solaris ignores status "disabled" on it, so rename the node
+\    and no driver binds to it.
+" /pci@1fe,0/pci@1,1/ebus@1/fdthree" find-device " fdthree-disabled" device-name device-end
+\ 1c. SMP: OpenBIOS creates a single CPU node whatever the CPU count. Read the count from
+\    fw_cfg (selector port 510, data port 511, FW_CFG_NB_CPUS = 5) and clone the boot CPU
+\    node for each further CPU, with cpuid/upa-portid set to its QEMU UPA port ID.
+\    Does nothing with one CPU.
+: (nb-cpus) ( -- n ) 5 510 iow! 511 ioc@ 511 ioc@ 8 lshift or ;
+: (cp-props) ( src-ph -- ) >r 0 0 begin r@ next-property while 2dup r@ get-package-property 0= if 2over property then repeat r> drop ;
+: (add-cpu) ( src-ph id -- ) " /" find-device new-device swap (cp-props) dup encode-int " cpuid" property encode-int " upa-portid" property finish-device ;
+: (add-cpus) ( -- ) " /SUNW,UltraSPARC-IIi" find-dev if (nb-cpus) 1 max 1 ?do dup i (add-cpu) loop drop then device-end ;
+(add-cpus)
 \ 2. instance-to-path must return paths that match Solaris' own device names:
 \    - Solaris names the host bridge pci@1f,0 (UPA port id), OpenBIOS uses pci@1fe,0;
 \    - for the console ihandle OpenBIOS returns ".../ebus@1/su    @0" (padded, wrong
@@ -57,6 +72,22 @@ create (bp-buf) d# 40 allot
 \    makes it panic (BAD TRAP in opromioctl_cb). Report no ASR data. SUNW,asr-export
 \    stays unimplemented: with a length of 0 its error return is handled cleanly.
 : SUNW,asr-export-len ( -- len ) 0 ;
+\ 3c. SMP: Solaris starts each further CPU (see fix 1c) with SUNW,start-cpu (node pc arg)
+\    and panics if that fails. OpenBIOS has no parked secondary CPUs, so hand the request
+\    to QEMU's CPU start register (ebus I/O 520: pc and arg as 32-bit halves, then the
+\    UPA port ID at 530). QEMU starts that CPU at pc with %o0 = arg, using the calling
+\    CPU's MMU state and trap table.
+: (cpu-start) ( arg pc portid -- ) >r dup 520 iol! 20 rshift 524 iol! dup 528 iol! 20 rshift 52c iol! r> 530 iol! ;
+: SUNW,start-cpu ( arg pc node -- ) " upa-portid" rot get-package-property if 0 else decode-int nip nip then (cpu-start) ;
+\ 3d. Each CPU's MMU setup interprets "' unix-tte is va>tte-data", pointing OBP's
+\    translation lookup hook at the kernel's Forth word unix-tte. Solaris never defines
+\    that word here, so the command fails with -13 ("unix-tte:interpret: exception -13")
+\    and the hook keeps the kernel's kmem64-tte, which OpenBIOS does use. The boot CPU
+\    survives that error, but a secondary CPU crashes in OpenBIOS's error path (BAD TRAP
+\    in the Forth inner interpreter), so skip exactly this command; same end result.
+' interpret constant (old-interpret)
+: (tte-cmd?) ( cmd -- cmd flag ) dup cstrlen d# 25 = if dup " ' unix-tte is va>tte-data" drop d# 25 comp 0= else false then ;
+: interpret ( ... cmd -- ... catch-result ) (tte-cmd?) if drop 0 else (old-interpret) execute then ;
 device-end
 \ 4. OpenBIOS normally leaves /chosen as the active package, so the Forth that Solaris
 \    feeds through "interpret" is compiled into /chosen's wordlist. Restore that; leaving

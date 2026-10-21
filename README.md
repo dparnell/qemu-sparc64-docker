@@ -12,13 +12,20 @@ The fork carries two IDE fixes Solaris needs:
   the first open of the DVD fails, and the installer reports "not a Solaris OS DVD"
   and ejects the disc.
 
+and multi-CPU support for the sun4u machine (`-smp` up to 4): CPU creation, a CPU start
+register the firmware's `SUNW,start-cpu` uses, UltraSPARC-II cross-CPU interrupts
+(mondos), and fixes needed to run the CPUs on separate host threads (MTTCG).
+
 `openbios-fixes.fth` patches the OpenBIOS device tree at boot (loaded as `nvramrc`):
 
 - the console path, so serial input works;
 - the spurious power-button interrupt;
 - the boot path and disk node, so the installed system can mount root;
 - a missing `SUNW,asr-export-len` service, without which `picld` makes the kernel panic
-  at boot with 4G of RAM.
+  at boot with 4G of RAM;
+- the floppy node, whose bad register specification makes Solaris' `fd` driver panic;
+- for multiple CPUs: a CPU node per CPU, the `SUNW,start-cpu` service, and a workaround
+  for a Forth command that crashes OpenBIOS on a secondary CPU.
 
 ## Build
 
@@ -70,7 +77,7 @@ Pass these with `-e NAME=value`:
 | `CDROM` | | ISO to attach in `run` mode (e.g. Oracle media) |
 | `MEM` | `2G` | guest RAM; up to `4G` works |
 | `CPU` | `TI-UltraSparc-IIi` | CPU model (`qemu-system-sparc64 -cpu help`) |
-| `CPUS` | `1` | CPU count; QEMU's sun4u machine supports only 1 |
+| `CPUS` | `1` | CPU count, up to 4 (2 is tested) |
 | `NET_MODE` | `user` | `user` (NAT with port forwards) or `none` |
 | `PORTS` | `2222:22 1521:1521` | forwards `[tcp:\|udp:]container:guest`, space or comma separated; empty for none |
 | `MAC` | QEMU default | guest MAC address, e.g. `52:54:00:12:34:57` for a second VM |
@@ -84,8 +91,11 @@ is run as-is.
 
 Notes:
 
-- **CPUs:** QEMU emulates sun4u as a single-CPU machine (`-smp 2` fails with "max CPUs
-  supported by machine 'sun4u' is 1"). Emulation runs on one host thread either way.
+- **CPUs:** with `CPUS=2` Solaris brings both CPUs online, each emulated on its own host
+  thread, so separate processes run in parallel; each CPU is still single-core TCG
+  speed. Tested with 2 (boot to login and 10 minutes idle after it); 3 and 4 are
+  accepted but untested. Add `-accel tcg,thread=single` to `QEMU_OPTS` to run all CPUs
+  on one host thread instead.
 - **Memory:** 2G, 3G and 4G boot to login. Above 4G (even 4352M) OpenBIOS itself
   crashes at power-on ("Unhandled Exception 0x30"), so 4G is the maximum until the
   OpenBIOS ROM is fixed. The launcher warns above 4G.

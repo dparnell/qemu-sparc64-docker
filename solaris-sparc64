@@ -13,7 +13,7 @@
 #   CDROM      ISO to attach in "run" mode         (none)
 #   MEM        guest RAM (4G max, see below)       2G
 #   CPU        QEMU CPU model (qemu -cpu help)     TI-UltraSparc-IIi
-#   CPUS       CPU count; sun4u supports only 1    1
+#   CPUS       CPU count, up to 4 (2 is tested)     1
 #   NET_MODE   user (NAT + port forwards) | none   user
 #   PORTS      forwards, "[tcp:|udp:]host:guest"   2222:22 1521:1521
 #   MAC        guest MAC address                   QEMU default 52:54:00:12:34:56

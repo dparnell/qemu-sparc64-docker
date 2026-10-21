@@ -15,7 +15,9 @@ RUN apk add --no-cache \
         bash bison build-base flex git glib-dev libslirp-dev linux-headers \
         perl pixman-dev pkgconf python3 samurai scanelf zlib-dev
 
-RUN git clone --depth 1 --branch "${QEMU_REF}" "${QEMU_REPO}" /src/qemu
+# BuildKit resolves QEMU_REF to its current commit on every build, so a moved branch
+# invalidates the cache instead of reusing an old checkout.
+ADD --keep-git-dir=true ${QEMU_REPO}#${QEMU_REF} /src/qemu
 
 WORKDIR /src/qemu/build
 RUN ../configure \
