@@ -1,0 +1,52 @@
+#!/bin/sh
+# Launch Solaris 10 (SPARC) under qemu-system-sparc64 -M sun4u.
+#
+#   solaris-sparc64 run       boot the installed system from $DISK (default)
+#   solaris-sparc64 install   boot the installer from $ISO onto $DISK
+#   solaris-sparc64 <cmd...>  run any other command (e.g. qemu-img create ...)
+#
+# Environment: DISK (s10.qcow2), ISO (sol-10-u11-ga-sparc-dvd.iso), CDROM (ISO to
+# attach in run mode), MEM (2G), NET (QEMU -nic spec), relative to /vm.
+# Extra arguments after run/install are passed to QEMU.
+set -e
+
+DISK=${DISK:-s10.qcow2}
+ISO=${ISO:-sol-10-u11-ga-sparc-dvd.iso}
+MEM=${MEM:-2G}
+# Guest gets 10.0.2.15 by DHCP; guest ssh/Oracle listener appear on 2222/1521 here.
+NET=${NET:-user,model=sunhme,hostfwd=tcp::2222-:22,hostfwd=tcp::1521-:1521}
+
+# OpenBIOS device-tree fixes Solaris needs, loaded as nvramrc (see the file).
+forth=$(grep -v -E '^[[:space:]]*[\]' /usr/share/qemu/openbios-fixes.fth | tr -d '\r' | tr '\n' ' ')
+
+need() { [ -e "$1" ] || { echo "solaris-sparc64: $1 not found in $(pwd)" >&2; exit 1; }; }
+
+mode=${1:-run}
+case "$mode" in
+run)
+    shift || true
+    need "$DISK"
+    set -- -prom-env 'boot-device=disk:a' "$@"
+    if [ -n "$CDROM" ]; then
+        need "$CDROM"
+        set -- -drive "file=$CDROM,if=ide,bus=1,unit=0,media=cdrom,readonly=on" "$@"
+    fi
+    ;;
+install)
+    shift
+    need "$DISK"
+    need "$ISO"
+    set -- -cdrom "$ISO" -prom-env 'boot-device=cdrom:f' "$@"
+    ;;
+*)
+    exec "$@"
+    ;;
+esac
+
+exec qemu-system-sparc64 -M sun4u -m "$MEM" -nographic -vga none \
+    -nic "$NET" \
+    -drive "file=$DISK,if=ide,bus=0,unit=0" \
+    -prom-env 'auto-boot?=true' \
+    -prom-env 'use-nvramrc?=true' \
+    -prom-env "nvramrc=$forth" \
+    "$@"
