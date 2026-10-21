@@ -5,21 +5,70 @@
 #   solaris-sparc64 install   boot the installer from $ISO onto $DISK
 #   solaris-sparc64 <cmd...>  run any other command (e.g. qemu-img create ...)
 #
-# Environment: DISK (s10.qcow2), ISO (sol-10-u11-ga-sparc-dvd.iso), CDROM (ISO to
-# attach in run mode), MEM (2G), NET (QEMU -nic spec), relative to /vm.
-# Extra arguments after run/install are passed to QEMU.
+# Extra arguments after run/install are passed to QEMU. Settings come from the
+# environment (paths are relative to /vm):
+#
+#   DISK       disk image                          s10.qcow2
+#   ISO        installer DVD for "install"         sol-10-u11-ga-sparc-dvd.iso
+#   CDROM      ISO to attach in "run" mode         (none)
+#   MEM        guest RAM (3G max, see below)       2G
+#   CPU        QEMU CPU model (qemu -cpu help)     TI-UltraSparc-IIi
+#   CPUS       CPU count; sun4u supports only 1    1
+#   NET_MODE   user (NAT + port forwards) | none   user
+#   PORTS      forwards, "[tcp:|udp:]host:guest"   2222:22 1521:1521
+#   MAC        guest MAC address                   QEMU default 52:54:00:12:34:56
+#   NET_OPTS   extra user-net options, e.g. net=10.0.3.0/24,dns=10.0.3.3
+#   NET        full -nic spec, overrides the above (e.g. tap/bridge setups)
+#   QEMU_OPTS  extra QEMU arguments
+#   DRY_RUN    1 = print the QEMU command instead of running it
 set -e
 
 DISK=${DISK:-s10.qcow2}
 ISO=${ISO:-sol-10-u11-ga-sparc-dvd.iso}
 MEM=${MEM:-2G}
-# Guest gets 10.0.2.15 by DHCP; guest ssh/Oracle listener appear on 2222/1521 here.
-NET=${NET:-user,model=sunhme,hostfwd=tcp::2222-:22,hostfwd=tcp::1521-:1521}
+CPU=${CPU:-TI-UltraSparc-IIi}
+CPUS=${CPUS:-1}
+NET_MODE=${NET_MODE:-user}
+PORTS=${PORTS-2222:22 1521:1521}
+
+die() { echo "solaris-sparc64: $*" >&2; exit 1; }
+need() { [ -e "$1" ] || die "$1 not found in $(pwd)"; }
+
+# Solaris boots with up to 3G; with 4G it panics in openeepr (picld reading the
+# OpenBIOS device tree). Warn but allow it.
+case "$MEM" in
+*[Gg]) mem_mb=$(( ${MEM%[Gg]} * 1024 )) ;;
+*[Mm]) mem_mb=${MEM%[Mm]} ;;
+*) mem_mb=$MEM ;;
+esac
+case "$mem_mb" in
+''|*[!0-9]*) ;;
+*) [ "$mem_mb" -ge 4096 ] && echo "solaris-sparc64: warning: MEM=$MEM; Solaris panics at boot with 4G or more, 3G is the tested maximum" >&2 ;;
+esac
+
+# Build the -nic spec for the onboard hme0 (QEMU's sunhme model).
+if [ -z "$NET" ]; then
+    case "$NET_MODE" in
+    user)
+        NET=user,model=sunhme
+        for p in $(echo "$PORTS" | tr ',' ' '); do
+            case "$p" in
+            tcp:*|udp:*) proto=${p%%:*}; p=${p#*:} ;;
+            *) proto=tcp ;;
+            esac
+            echo "$p" | grep -q -E '^[0-9]+:[0-9]+$' || die "bad PORTS entry '$p' (want [tcp:|udp:]host:guest)"
+            NET="$NET,hostfwd=$proto::${p%%:*}-:${p#*:}"
+        done
+        [ -n "$NET_OPTS" ] && NET="$NET,$NET_OPTS"
+        ;;
+    none) NET=none ;;
+    *) die "NET_MODE must be user or none (use NET for anything else)" ;;
+    esac
+    [ -n "$MAC" ] && [ "$NET" != none ] && NET="$NET,mac=$MAC"
+fi
 
 # OpenBIOS device-tree fixes Solaris needs, loaded as nvramrc (see the file).
 forth=$(grep -v -E '^[[:space:]]*[\]' /usr/share/qemu/openbios-fixes.fth | tr -d '\r' | tr '\n' ' ')
-
-need() { [ -e "$1" ] || { echo "solaris-sparc64: $1 not found in $(pwd)" >&2; exit 1; }; }
 
 mode=${1:-run}
 case "$mode" in
@@ -43,10 +92,23 @@ install)
     ;;
 esac
 
-exec qemu-system-sparc64 -M sun4u -m "$MEM" -nographic -vga none \
+# QEMU_OPTS is split on whitespace on purpose.
+# shellcheck disable=SC2086
+set -- qemu-system-sparc64 -M sun4u -cpu "$CPU" -smp "$CPUS" -m "$MEM" \
+    -nographic -vga none \
     -nic "$NET" \
     -drive "file=$DISK,if=ide,bus=0,unit=0" \
     -prom-env 'auto-boot?=true' \
     -prom-env 'use-nvramrc?=true' \
     -prom-env "nvramrc=$forth" \
-    "$@"
+    $QEMU_OPTS "$@"
+
+if [ "$DRY_RUN" = 1 ]; then
+    for a in "$@"; do
+        case "$a" in nvramrc=*) a='nvramrc=<openbios-fixes.fth>' ;; esac
+        printf '%s ' "$a"
+    done
+    echo
+    exit 0
+fi
+exec "$@"

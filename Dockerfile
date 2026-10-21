@@ -43,10 +43,10 @@ RUN apk add --no-cache $(cat /tmp/runtime-deps) && rm /tmp/runtime-deps
 
 COPY --from=build /out/usr/ /usr/
 COPY openbios-fixes.fth /usr/share/qemu/openbios-fixes.fth
-COPY solaris-sparc64 /usr/bin/solaris-sparc64
+COPY --chmod=0755 solaris-sparc64 /usr/bin/solaris-sparc64
 
-# Disk images and ISOs live in /vm; ssh and the Oracle listener are forwarded from
-# the guest to these ports inside the container (publish them with -p).
+# Disk images and ISOs live in /vm. By default the guest's ssh and Oracle listener are
+# forwarded to these container ports (publish them with -p; change them with PORTS).
 WORKDIR /vm
 VOLUME /vm
 EXPOSE 2222 1521
