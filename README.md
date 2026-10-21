@@ -29,6 +29,20 @@ docker build -t qemu-sparc64-solaris .
 Build arguments: `QEMU_REPO` (default the fork over https), `QEMU_REF` (branch or
 tag, default `sun4u-solaris10`), `ALPINE_VERSION`.
 
+## Build environment
+
+`buildenv/` holds a toolchain image (Ubuntu 24.04 with QEMU's build dependencies, the
+`sparc64-linux-gnu` cross compiler for OpenBIOS, `xsltproc` and `gdb-multiarch`), so
+nothing has to be installed on the host. `buildenv/sparc-build` runs a command in it as
+your user, with `$HOME` (and the current directory, if outside it) mounted at the same
+path; it builds the image on first use.
+
+```sh
+cd ~/fork/qemu/build && ~/fork/qemu-sparc64-docker/buildenv/sparc-build ninja qemu-system-sparc64
+~/fork/qemu-sparc64-docker/buildenv/sparc-build bash     # shell
+SPARC_BUILD_REBUILD=1 ~/fork/qemu-sparc64-docker/buildenv/sparc-build true   # rebuild image
+```
+
 ## Use
 
 Put the disk image and DVD ISO in a directory and mount it at `/vm`. Use `-it`: the

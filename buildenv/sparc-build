@@ -1,0 +1,33 @@
+#!/bin/sh
+# Run a command inside the build-environment image, as the calling user, with $HOME
+# mounted at the same path and the current directory as the working directory.
+#
+#   buildenv/sparc-build make -C ~/src/openbios/obj-sparc64
+#   buildenv/sparc-build bash            # interactive shell
+#
+# Builds the image on first use (or with SPARC_BUILD_REBUILD=1).
+set -e
+IMAGE=${SPARC_BUILD_IMAGE:-sparc-buildenv}
+here=$(cd "$(dirname "$0")" && pwd)
+
+if [ "$SPARC_BUILD_REBUILD" = 1 ] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    docker build -t "$IMAGE" "$here" >&2
+fi
+
+tty=
+[ -t 0 ] && [ -t 1 ] && tty=-it
+
+# Also mount the working directory when it is outside $HOME (e.g. /mnt/f/...).
+case "$PWD/" in
+"$HOME"/*) pwdmount= ;;
+*) pwdmount="-v $PWD:$PWD" ;;
+esac
+
+[ $# -eq 0 ] && set -- bash
+# shellcheck disable=SC2086
+exec docker run --rm $tty \
+    --user "$(id -u):$(id -g)" \
+    -e HOME="$HOME" \
+    -v "$HOME:$HOME" $pwdmount \
+    -w "$PWD" \
+    "$IMAGE" "$@"
