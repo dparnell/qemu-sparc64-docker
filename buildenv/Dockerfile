@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         bison build-essential ca-certificates flex git libglib2.0-dev libpixman-1-dev \
         libslirp-dev meson ninja-build pkg-config python3 python3-venv zlib1g-dev \
         # OpenBIOS for sparc64
-        gcc-sparc64-linux-gnu xsltproc \
+        fcode-utils gcc-sparc64-linux-gnu xsltproc \
         # inspecting and debugging firmware and guests
         file gdb-multiarch xxd \
     && rm -rf /var/lib/apt/lists/*
