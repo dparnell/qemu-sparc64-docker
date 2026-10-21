@@ -51,6 +51,12 @@ create (bp-buf) d# 40 allot
 : (pfx?) ( cstr str len -- cstr flag ) 2 pick cstrlen over < if 2drop false else >r over swap r@ comp 0= if dup r@ + c@ dup 0= swap [char] : = or else false then r> drop then ;
 : (sol-disk?) ( cstr -- cstr flag ) " /pci@1f,0/pci@1,1/ide@3/disk@0,0" (pfx?) dup 0= if drop " /pci@1f,0/pci@1,1/ide@3/dad@0,0" (pfx?) then ;
 : finddevice ( dev_spec -- phandle|-1 ) (sol-disk?) if drop (sol-disk-ph) else (old-finddevice) execute then ;
+\ 3b. picld asks for the ASR (automatic system recovery) data through /dev/openprom.
+\    OpenBIOS has no SUNW,asr-export-len, so the call fails without writing its result
+\    and the openprom driver uses an uninitialised length; with 4G of RAM that garbage
+\    makes it panic (BAD TRAP in opromioctl_cb). Report no ASR data. SUNW,asr-export
+\    stays unimplemented: with a length of 0 its error return is handled cleanly.
+: SUNW,asr-export-len ( -- len ) 0 ;
 device-end
 \ 4. OpenBIOS normally leaves /chosen as the active package, so the Forth that Solaris
 \    feeds through "interpret" is compiled into /chosen's wordlist. Restore that; leaving

@@ -11,7 +11,7 @@
 #   DISK       disk image                          s10.qcow2
 #   ISO        installer DVD for "install"         sol-10-u11-ga-sparc-dvd.iso
 #   CDROM      ISO to attach in "run" mode         (none)
-#   MEM        guest RAM (3G max, see below)       2G
+#   MEM        guest RAM (4G max, see below)       2G
 #   CPU        QEMU CPU model (qemu -cpu help)     TI-UltraSparc-IIi
 #   CPUS       CPU count; sun4u supports only 1    1
 #   NET_MODE   user (NAT + port forwards) | none   user
@@ -34,8 +34,8 @@ PORTS=${PORTS-2222:22 1521:1521}
 die() { echo "solaris-sparc64: $*" >&2; exit 1; }
 need() { [ -e "$1" ] || die "$1 not found in $(pwd)"; }
 
-# Solaris boots with up to 3G; with 4G it panics in openeepr (picld reading the
-# OpenBIOS device tree). Warn but allow it.
+# Up to 4G works. Above 4G OpenBIOS itself crashes at power-on ("Unhandled Exception
+# 0x30"; it relocates itself to the top of RAM). Warn but allow it.
 case "$MEM" in
 *[Gg]) mem_mb=$(( ${MEM%[Gg]} * 1024 )) ;;
 *[Mm]) mem_mb=${MEM%[Mm]} ;;
@@ -43,7 +43,7 @@ case "$MEM" in
 esac
 case "$mem_mb" in
 ''|*[!0-9]*) ;;
-*) [ "$mem_mb" -ge 4096 ] && echo "solaris-sparc64: warning: MEM=$MEM; Solaris panics at boot with 4G or more, 3G is the tested maximum" >&2 ;;
+*) [ "$mem_mb" -gt 4096 ] && echo "solaris-sparc64: warning: MEM=$MEM; OpenBIOS crashes with more than 4G" >&2 ;;
 esac
 
 # Build the -nic spec for the onboard hme0 (QEMU's sunhme model).

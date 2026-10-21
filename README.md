@@ -16,7 +16,9 @@ The fork carries two IDE fixes Solaris needs:
 
 - the console path, so serial input works;
 - the spurious power-button interrupt;
-- the boot path and disk node, so the installed system can mount root.
+- the boot path and disk node, so the installed system can mount root;
+- a missing `SUNW,asr-export-len` service, without which `picld` makes the kernel panic
+  at boot with 4G of RAM.
 
 ## Build
 
@@ -52,7 +54,7 @@ Pass these with `-e NAME=value`:
 | `DISK` | `s10.qcow2` | disk image in `/vm` |
 | `ISO` | `sol-10-u11-ga-sparc-dvd.iso` | installer DVD for `install` |
 | `CDROM` | | ISO to attach in `run` mode (e.g. Oracle media) |
-| `MEM` | `2G` | guest RAM; up to `3G` works |
+| `MEM` | `2G` | guest RAM; up to `4G` works |
 | `CPU` | `TI-UltraSparc-IIi` | CPU model (`qemu-system-sparc64 -cpu help`) |
 | `CPUS` | `1` | CPU count; QEMU's sun4u machine supports only 1 |
 | `NET_MODE` | `user` | `user` (NAT with port forwards) or `none` |
@@ -70,9 +72,9 @@ Notes:
 
 - **CPUs:** QEMU emulates sun4u as a single-CPU machine (`-smp 2` fails with "max CPUs
   supported by machine 'sun4u' is 1"). Emulation runs on one host thread either way.
-- **Memory:** 2G and 3G boot to login. With 4G Solaris sees the memory but panics
-  early in boot (`BAD TRAP` in `openeepr`, while `picld` reads the OpenBIOS device
-  tree), so 3G is the practical maximum. The launcher warns for 4G or more.
+- **Memory:** 2G, 3G and 4G boot to login. Above 4G (even 4352M) OpenBIOS itself
+  crashes at power-on ("Unhandled Exception 0x30"), so 4G is the maximum until the
+  OpenBIOS ROM is fixed. The launcher warns above 4G.
 - **Networking:** with `NET_MODE=user` the guest gets `10.0.2.15` by DHCP (gateway
   `10.0.2.2`, DNS `10.0.2.3`) and can reach out, but nothing can connect in except the
   `PORTS` forwards. Each forward listens on the container port; publish it with `-p`,
