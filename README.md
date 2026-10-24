@@ -66,6 +66,26 @@ docker run --rm -it -v "$PWD:/vm" qemu-sparc64-solaris install
 docker run --rm -it -v "$PWD:/vm" -p 2222:2222 -p 1521:1521 qemu-sparc64-solaris
 ```
 
+### macOS (Apple silicon) with Apple `container`
+
+The image builds natively for arm64 with Apple's
+[`container`](https://github.com/apple/container) tool, which runs each container in its
+own lightweight VM. Its commands mirror Docker's. Each container VM gets 1 GiB of RAM by
+default, so give it more than the guest's `MEM` with `-m`, and use `-c` for CPUs:
+
+```sh
+brew install container
+brew services start container
+container system kernel set --recommended     # once
+
+container build -t qemu-sparc64-solaris .
+container run --rm -v "$PWD:/vm" qemu-sparc64-solaris qemu-img create -f qcow2 s10.qcow2 64G
+container run --rm -it -m 3G -c 2 -v "$PWD:/vm" qemu-sparc64-solaris install
+container run --rm -it -m 3G -c 2 -v "$PWD:/vm" -p 2222:2222 -p 1521:1521 qemu-sparc64-solaris
+```
+
+With `MEM=4G` use `-m 5G` or more.
+
 ### Settings
 
 Pass these with `-e NAME=value`:
