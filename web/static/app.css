@@ -84,9 +84,20 @@ main {
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgb(0 0 0 / 0.55);
-  color: #eee;
+  padding: 16px;
+  background: rgb(0 0 0 / 0.7);
+}
+#offline p {
+  margin: 0;
+  max-width: 420px;
+  padding: 14px 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
   font-size: 15px;
+  text-align: center;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.4);
 }
 #offline[hidden] { display: none; }
 

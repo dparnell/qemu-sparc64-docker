@@ -109,7 +109,8 @@ container exec s10 vmctl status          # or any other vmctl command, see vmctl
   (`CONSOLE_LOG`, empty for none).
 - **Menu (Ctrl-B m):** change or eject the CD (lists the `.iso`/`.img` files in `/vm`),
   send a break, pause/resume, disk snapshots, console size, status, a `vmctl` shell,
-  restart, power button and quit.
+  restart and quit. There is no power button: Solaris's power driver fails to attach on
+  this machine, so it ignores one.
 - **vmctl:** the same actions from the command line, through QEMU's QMP socket
   (`/run/qemu/qmp.sock`; `vmctl qmp '<json>'` sends raw QMP). It works in plain `run`
   mode too, except `restart`.

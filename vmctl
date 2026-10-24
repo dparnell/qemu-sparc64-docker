@@ -123,7 +123,6 @@ menu_main() {
         "vmctl shell" v "new-window -n vmctl 'vmctl shell'" \
         "" \
         "Restart (power cycle)" R "confirm-before -p 'Power cycle the VM? (y/n)' $(tq "$(vm restart)")" \
-        "Power button" P "confirm-before -p 'Press the power button? (y/n)' $(tq "$(vm powerdown)")" \
         "Quit QEMU" Q "confirm-before -p 'Kill the VM now, without shutting down? (y/n)' $(tq "$(vm quit)")"
 }
 
@@ -198,7 +197,6 @@ vmctl COMMAND
   break                   send a serial break to the console
   pause | resume          stop or continue the CPUs
   restart                 power cycle: start QEMU again, keeping the CD (session mode)
-  powerdown               press the power button
   quit                    kill QEMU at once (shut Solaris down first)
   snapshots               list the disk snapshots (kept inside the qcow2)
   snapshot-save NAME      snapshot the disk (cleanest with Solaris at the ok prompt)
@@ -283,9 +281,6 @@ restart)
     touch "$RUN_DIR/restart"
     quit_qemu
     msg "Restarting QEMU${1:+ from snapshot $1}"
-    ;;
-powerdown)
-    cmd system_powerdown >/dev/null
     ;;
 quit)
     quit_qemu

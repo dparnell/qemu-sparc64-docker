@@ -331,7 +331,7 @@ func (h *hub) updateStatus() {
 // Actions the page may run, and whether they take an argument.
 var actions = map[string]bool{
 	"cd": true, "eject": false, "break": false, "pause": false, "resume": false,
-	"restart": false, "powerdown": false, "quit": false,
+	"restart": false, "quit": false,
 	"snapshot-save": true, "snapshot-load": true, "snapshot-delete": true,
 }
 

@@ -52,9 +52,9 @@
         <button data-action="restart" data-confirm="Power cycle the VM? Unsaved work in Solaris is lost.">Restart</button>
       </div>
       <div class="row">
-        <button data-action="powerdown" data-confirm="Press the power button?">Power button</button>
         <button class="danger" data-action="quit" data-confirm="Kill QEMU now, without shutting Solaris down?">Quit QEMU</button>
       </div>
+      <p class="hint">To shut down cleanly, run <code>init 0</code> in Solaris first, then quit.</p>
     </section>
 
     <section class="panel">
