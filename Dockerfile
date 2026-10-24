@@ -41,11 +41,14 @@ RUN mkdir -p /out/usr/bin /out/usr/share/qemu \
 FROM alpine:${ALPINE_VERSION}
 
 COPY --from=build /out/runtime-deps /tmp/runtime-deps
-RUN apk add --no-cache $(cat /tmp/runtime-deps) && rm /tmp/runtime-deps
+# tmux, socat and jq are for session mode and vmctl.
+RUN apk add --no-cache $(cat /tmp/runtime-deps) jq socat tmux && rm /tmp/runtime-deps
 
 COPY --from=build /out/usr/ /usr/
 COPY openbios-fixes.fth /usr/share/qemu/openbios-fixes.fth
-COPY --chmod=0755 solaris-sparc64 /usr/bin/solaris-sparc64
+COPY --chmod=0755 solaris-sparc64 vmctl /usr/bin/
+COPY tmux.conf /etc/tmux.conf
+RUN ln -s vmctl /usr/bin/attach
 
 # Disk images and ISOs live in /vm. By default the guest's ssh and Oracle listener are
 # forwarded to these container ports (publish them with -p; change them with PORTS).

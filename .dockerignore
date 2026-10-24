@@ -1,3 +1,5 @@
 *
 !openbios-fixes.fth
 !solaris-sparc64
+!vmctl
+!tmux.conf

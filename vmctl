@@ -1,0 +1,305 @@
+#!/bin/sh
+# Control the running QEMU through its QMP socket, and the tmux session around it.
+# Run "vmctl help" for the commands. Installed as "attach" too, which attaches to the
+# session.
+set -e
+
+RUN_DIR=/run/qemu
+QMP_SOCK=${QMP_SOCK:-$RUN_DIR/qmp.sock}
+SESSION=solaris
+
+# With -c CLIENT (used by the tmux menus) messages go to that tmux client's status
+# line instead of the terminal.
+client=
+if [ "$1" = -c ]; then
+    client=$2
+    shift 2
+fi
+
+msg() {
+    if [ -n "$client" ]; then
+        tmux display-message -c "$client" -d 4000 "$*"
+    else
+        echo "$*"
+    fi
+}
+quiet=
+error() {
+    if [ -n "$quiet" ]; then
+        :
+    elif [ -n "$client" ]; then
+        tmux display-message -c "$client" -d 6000 "vmctl: $*"
+    else
+        echo "vmctl: $*" >&2
+    fi
+}
+die() { error "$@"; exit 1; }
+
+# Send QMP commands (one JSON object per argument) over one connection. Prints the
+# "return" of the last one; on the first error, reports it and fails.
+qmp() {
+    [ -S "$QMP_SOCK" ] || { error "QEMU is not running (no $QMP_SOCK)"; return 1; }
+    out=$({ echo '{"execute":"qmp_capabilities"}'; printf '%s\n' "$@"; } |
+        socat -t 30 - "UNIX-CONNECT:$QMP_SOCK") || { error "cannot connect to $QMP_SOCK"; return 1; }
+    res=$(printf '%s\n' "$out" | jq -c 'select(has("return") or has("error"))' | tail -n +2)
+    err=$(printf '%s\n' "$res" | jq -r 'select(has("error")) | .error.desc' | head -n 1)
+    [ -z "$err" ] || { error "$err"; return 1; }
+    printf '%s\n' "$res" | tail -n 1 | jq -c '.return'
+}
+
+# cmd NAME [ARGS-JSON]
+cmd() {
+    if [ -n "$2" ]; then
+        qmp "{\"execute\":\"$1\",\"arguments\":$2}"
+    else
+        qmp "{\"execute\":\"$1\"}"
+    fi
+}
+
+check_tag() {
+    [ -n "$1" ] || die "snapshot name missing"
+    printf '%s' "$1" | grep -q -E '^[A-Za-z0-9._-]+$' ||
+        die "snapshot names may only use letters, digits, '.', '_' and '-'"
+}
+
+json_str() { jq -n --arg s "$1" '$s'; }
+
+snapshots() {
+    cmd query-named-block-nodes '{"flat":true}' |
+        jq -r '.[] | select(."node-name" == "disk0") | .image.snapshots // [] | .[] |
+            "\(.name)\t\(."date-sec" | strftime("%Y-%m-%d %H:%M"))"'
+}
+
+# QEMU closes the socket as it quits, often before answering.
+quit_qemu() {
+    [ -S "$QMP_SOCK" ] || die "QEMU is not running (no $QMP_SOCK)"
+    printf '%s\n' '{"execute":"qmp_capabilities"}' '{"execute":"quit"}' |
+        socat -t 5 - "UNIX-CONNECT:$QMP_SOCK" >/dev/null 2>&1 || true
+}
+
+cd_file() {
+    cmd query-block | jq -r '.[] | select(.device == "cd0") | .inserted.file // empty'
+}
+
+isos() {
+    find /vm -maxdepth 2 -type f \( -iname '*.iso' -o -iname '*.img' \) ! -name '.*' 2>/dev/null | sort
+}
+
+# Quote a string as a tmux double-quoted argument.
+tq() { printf '"%s"' "$(printf '%s' "$1" | sed 's/[\\"$]/\\&/g')"; }
+# A run-shell command that calls vmctl for this client; arguments are quoted for sh.
+vm() {
+    s="vmctl -c '$client'"
+    for a; do s="$s '$a'"; done
+    printf 'run-shell -b %s' "$(tq "$s")"
+}
+# Escape '#' in menu labels (they are formats).
+label() { printf '%s' "$1" | sed 's/#/##/g'; }
+
+menu_main() {
+    status=$(cmd query-status | jq -r '.status')
+    if [ "$status" = paused ]; then
+        pause_item="Resume"
+        pause_cmd=$(vm resume)
+    else
+        pause_item="Pause"
+        pause_cmd=$(vm pause)
+    fi
+    cdf=$(cd_file)
+    tmux display-menu -c "$client" -T "#[align=centre] Solaris VM: $status " -x C -y C \
+        "Change CD...  [$(label "${cdf:-empty}")]" c "$(vm menu-cd)" \
+        "Eject CD" e "$(vm eject)" \
+        "" \
+        "Send break" b "$(vm break)" \
+        "$pause_item" p "$pause_cmd" \
+        "" \
+        "Save disk snapshot..." s "command-prompt -p 'Snapshot name:' $(tq "$(vm snapshot-save %%)")" \
+        "Restore snapshot (power cycle)..." l "$(vm menu-snapshot snapshot-load)" \
+        "Delete snapshot..." d "$(vm menu-snapshot snapshot-delete)" \
+        "" \
+        "Console 80x24" 8 "resize-window -t $SESSION:console -x 80 -y 24" \
+        "Console fit to terminal" f "resize-window -t $SESSION:console -A" \
+        "Status" i "run-shell 'vmctl status'" \
+        "vmctl shell" v "new-window -n vmctl 'vmctl shell'" \
+        "" \
+        "Restart (power cycle)" R "confirm-before -p 'Power cycle the VM? (y/n)' $(tq "$(vm restart)")" \
+        "Power button" P "confirm-before -p 'Press the power button? (y/n)' $(tq "$(vm powerdown)")" \
+        "Quit QEMU" Q "confirm-before -p 'Kill the VM now, without shutting down? (y/n)' $(tq "$(vm quit)")"
+}
+
+menu_cd() {
+    cur=$(cd_file)
+    set --
+    while IFS= read -r f; do
+        case "$f" in ''|*"'"*) continue ;; esac
+        mark="  "
+        [ "$f" = "$cur" ] && mark="* "
+        set -- "$@" "$mark$(label "${f#/vm/}")" "" "$(vm cd "$f")"
+    done <<EOF
+$(isos)
+EOF
+    [ $# -gt 0 ] || die "no .iso or .img files in /vm"
+    tmux display-menu -c "$client" -T "#[align=centre] CD-ROM " -x C -y C "$@"
+}
+
+menu_snapshot() {
+    action=$1
+    set --
+    while IFS="$(printf '\t')" read -r t date; do
+        [ -n "$t" ] || continue
+        set -- "$@" "$(label "$t")  ($date)" "" "$(vm "$action" "$t")"
+    done <<EOF
+$(snapshots)
+EOF
+    [ $# -gt 0 ] || die "no snapshots"
+    title="Restore snapshot (power cycle)"
+    [ "$action" = snapshot-delete ] && title="Delete snapshot"
+    tmux display-menu -c "$client" -T "#[align=centre] $title " -x C -y C "$@"
+}
+
+attach() {
+    tmux has-session -t "$SESSION" 2>/dev/null ||
+        die "no session running (start the container with the \"session\" command)"
+    # Fall back to a terminal type the image knows, e.g. for xterm-ghostty.
+    case "$TERM" in
+    ''|dumb) TERM=xterm-256color ;;
+    *) [ -e "/etc/terminfo/$(printf '%.1s' "$TERM")/$TERM" ] ||
+        [ -e "/usr/share/terminfo/$(printf '%.1s' "$TERM")/$TERM" ] || TERM=xterm-256color ;;
+    esac
+    export TERM
+    exec tmux attach -t "$SESSION:console"
+}
+
+shell() {
+    echo "vmctl shell: vmctl commands without \"vmctl\", or raw QMP JSON. \"help\", \"exit\"."
+    while printf 'vmctl> ' && read -r line; do
+        case "$line" in
+        '') ;;
+        exit|quit) break ;;
+        '{'*) QMP_SOCK=$QMP_SOCK qmp "$line" | jq . || true ;;
+        *)
+            set -f
+            # shellcheck disable=SC2086
+            set -- $line
+            set +f
+            "$0" "$@" || true
+            ;;
+        esac
+    done
+}
+
+usage() {
+    cat <<'EOF'
+vmctl COMMAND
+
+  status                  VM state, CD and snapshots
+  cd FILE                 insert an ISO (relative paths are under /vm)
+  eject [-f]              eject the CD (-f even if the guest locked the drive)
+  break                   send a serial break to the console
+  pause | resume          stop or continue the CPUs
+  restart                 power cycle: start QEMU again, keeping the CD (session mode)
+  powerdown               press the power button
+  quit                    kill QEMU at once (shut Solaris down first)
+  snapshots               list the disk snapshots (kept inside the qcow2)
+  snapshot-save NAME      snapshot the disk (cleanest with Solaris at the ok prompt)
+  snapshot-load NAME      power cycle back to a disk snapshot (session mode)
+  snapshot-delete NAME    delete a disk snapshot
+  qmp JSON...             send raw QMP commands, print the last result
+  attach                  attach to the console session (also: "attach")
+  shell                   interactive vmctl prompt
+
+In the session: Ctrl-B m opens the menu, Ctrl-B d detaches.
+EOF
+}
+
+[ "$(basename "$0")" = attach ] && attach
+
+[ $# -gt 0 ] || { usage; exit 1; }
+command=$1
+shift
+case "$command" in
+status)
+    cmd query-status | jq -r '"VM:        \(.status)"'
+    cdf=$(cd_file)
+    echo "CD:        ${cdf:-empty}"
+    echo "Snapshots:"
+    snapshots | sed 's/^/  /'
+    ;;
+statusline)
+    QMP_SOCK=$RUN_DIR/qmp-status.sock
+    [ -S "$QMP_SOCK" ] || { echo "QEMU not running"; exit 0; }
+    st=$(cmd query-status 2>/dev/null | jq -r '.status') || st="?"
+    cdf=$(cd_file 2>/dev/null) || cdf=
+    cdf=${cdf##*/}
+    echo "$st | CD: ${cdf:-empty}"
+    ;;
+cd)
+    [ -n "$1" ] || die "usage: vmctl cd FILE"
+    f=$1
+    case "$f" in /*) ;; *) f=/vm/$f ;; esac
+    [ -f "$f" ] || die "$f not found"
+    cmd blockdev-change-medium "{\"device\":\"cd0\",\"filename\":$(json_str "$f"),\"format\":\"raw\",\"read-only-mode\":\"read-only\"}" >/dev/null
+    msg "CD: ${f#/vm/}"
+    ;;
+eject)
+    force=false
+    [ "$1" = -f ] && force=true
+    cmd eject "{\"device\":\"cd0\",\"force\":$force}" >/dev/null
+    msg "CD ejected"
+    ;;
+break)
+    cmd chardev-send-break '{"id":"con"}' >/dev/null
+    ;;
+pause)
+    cmd stop >/dev/null
+    msg "VM paused"
+    ;;
+resume)
+    cmd cont >/dev/null
+    msg "VM running"
+    ;;
+restart)
+    # Power cycle: the session's console loop starts QEMU again (see solaris-sparc64).
+    tmux has-session -t "$SESSION" 2>/dev/null || die "restart needs session mode"
+    [ -z "$1" ] || { check_tag "$1"; snapshots | cut -f 1 | grep -qx "$1" || die "no snapshot $1"; }
+    cd_file >"$RUN_DIR/restart.cd"
+    [ -z "$1" ] || printf '%s' "$1" >"$RUN_DIR/restart.revert"
+    touch "$RUN_DIR/restart"
+    quit_qemu
+    msg "Restarting QEMU${1:+ from snapshot $1}"
+    ;;
+powerdown)
+    cmd system_powerdown >/dev/null
+    ;;
+quit)
+    quit_qemu
+    ;;
+snapshots)
+    snapshots
+    ;;
+snapshot-save)
+    check_tag "$1"
+    cmd blockdev-snapshot-internal-sync "{\"device\":\"disk0\",\"name\":\"$1\"}" >/dev/null
+    msg "Saved disk snapshot $1"
+    ;;
+snapshot-load)
+    [ -n "$1" ] || die "usage: vmctl snapshot-load NAME"
+    exec "$0" ${client:+-c "$client"} restart "$1"
+    ;;
+snapshot-delete)
+    check_tag "$1"
+    cmd blockdev-snapshot-delete-internal-sync "{\"device\":\"disk0\",\"name\":\"$1\"}" >/dev/null
+    msg "Deleted snapshot $1"
+    ;;
+qmp)
+    [ $# -gt 0 ] || die "usage: vmctl qmp JSON..."
+    qmp "$@" | jq .
+    ;;
+attach) attach ;;
+shell) shell ;;
+menu) menu_main ;;
+menu-cd) menu_cd ;;
+menu-snapshot) menu_snapshot "$1" ;;
+help|-h|--help) usage ;;
+*) usage >&2; exit 1 ;;
+esac

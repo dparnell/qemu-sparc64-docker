@@ -86,6 +86,50 @@ container run --rm -it -m 3G -c 2 -v "$PWD:/vm" -p 2222:2222 -p 1521:1521 qemu-s
 
 With `MEM=4G` use `-m 5G` or more.
 
+### Session mode: run in the background, attach to the console
+
+`session` (or `session install`) runs QEMU in a tmux session inside the container, so
+the VM keeps running with nobody attached and you can attach and detach at will:
+
+```sh
+container run -d --name s10 -m 3G -c 2 -v "$PWD:/vm" \
+    -p 127.0.0.1:2222:2222 -p 127.0.0.1:1521:1521 qemu-sparc64-solaris session
+container exec -it s10 attach            # Ctrl-B d detaches, Ctrl-B m opens the menu
+container exec s10 vmctl status          # or any other vmctl command, see vmctl help
+```
+
+(With Docker: `docker run -d ... session` and `docker exec -it s10 attach`.)
+
+- **Console:** window `console` is the guest's serial console. Every key goes to the
+  guest, Ctrl-C, Ctrl-Z and Ctrl-A included; nothing typed there can stop QEMU. Choose
+  "DEC VT100" or "xterm" as the terminal type in the installer. The console stays
+  80x24 whatever the terminal size, since a serial console can't tell Solaris its
+  size; "Console fit to terminal" in the menu resizes it, then set the size in Solaris
+  with `stty rows R columns C`. Output is also appended to `/vm/console.log`
+  (`CONSOLE_LOG`, empty for none).
+- **Menu (Ctrl-B m):** change or eject the CD (lists the `.iso`/`.img` files in `/vm`),
+  send a break, pause/resume, disk snapshots, console size, status, a `vmctl` shell,
+  restart, power button and quit.
+- **vmctl:** the same actions from the command line, through QEMU's QMP socket
+  (`/run/qemu/qmp.sock`; `vmctl qmp '<json>'` sends raw QMP). It works in plain `run`
+  mode too, except `restart`.
+- **Restart** is a power cycle: QEMU quits and the session starts it again, keeping the
+  disc in the drive and any attached terminals. QEMU's own reset crashes OpenBIOS once
+  Solaris has run, so there is no warm reset.
+- **Snapshots** are of the disk only, kept inside the qcow2 (`qemu-img snapshot -l`
+  lists them too). Saving works while the VM runs, but take them with Solaris shut down
+  to the `ok` prompt (`init 0`) for a clean file system. Restoring is a power cycle back
+  to the snapshot. Snapshots with VM state (QEMU's savevm/loadvm) don't work here: the
+  restored Solaris hangs.
+- **Break** sends a serial break on ttya (Stop-A on a real Sun). Solaris 10 here
+  ignores it, even after `kbd -a enable`, so it does not get you to the `ok` prompt.
+- **CD changes:** Solaris sees a new disc at once (vold mounts it under `/cdrom`).
+  OpenBIOS only sees the disc that was in the drive at power-on, so to boot from a
+  different disc, change it and restart.
+- **Stopping:** shut Solaris down first (`init 0`, to the `ok` prompt), then quit QEMU
+  from the menu or `container stop`. Stopping the container quits QEMU at once, like
+  pulling the plug.
+
 ### Settings
 
 Pass these with `-e NAME=value`:
@@ -94,7 +138,7 @@ Pass these with `-e NAME=value`:
 |---|---|---|
 | `DISK` | `s10.qcow2` | disk image in `/vm` |
 | `ISO` | `sol-10-u11-ga-sparc-dvd.iso` | installer DVD for `install` |
-| `CDROM` | | ISO to attach in `run` mode (e.g. Oracle media) |
+| `CDROM` | | ISO in the CD drive in `run` mode (e.g. Oracle media); empty drive otherwise |
 | `MEM` | `2G` | guest RAM; up to `4G` works |
 | `CPU` | `TI-UltraSparc-IIi` | CPU model (`qemu-system-sparc64 -cpu help`) |
 | `CPUS` | `1` | CPU count, up to 4 (2 is tested) |
@@ -103,6 +147,7 @@ Pass these with `-e NAME=value`:
 | `MAC` | QEMU default | guest MAC address, e.g. `52:54:00:12:34:57` for a second VM |
 | `NET_OPTS` | | extra user-mode options, e.g. `net=10.0.3.0/24` |
 | `NET` | | full QEMU `-nic` spec; overrides `NET_MODE`/`PORTS`/`MAC`/`NET_OPTS` |
+| `CONSOLE_LOG` | `console.log` | console log in session mode; empty for none |
 | `QEMU_OPTS` | | extra QEMU arguments |
 | `DRY_RUN` | | `1` prints the QEMU command instead of running it |
 

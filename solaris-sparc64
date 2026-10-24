@@ -3,6 +3,9 @@
 #
 #   solaris-sparc64 run       boot the installed system from $DISK (default)
 #   solaris-sparc64 install   boot the installer from $ISO onto $DISK
+#   solaris-sparc64 session [run|install]
+#                             the same, inside a tmux session you attach to with
+#                             "attach" and manage with "vmctl" (see vmctl help)
 #   solaris-sparc64 <cmd...>  run any other command (e.g. qemu-img create ...)
 #
 # Extra arguments after run/install are passed to QEMU. Settings come from the
@@ -10,7 +13,7 @@
 #
 #   DISK       disk image                          s10.qcow2
 #   ISO        installer DVD for "install"         sol-10-u11-ga-sparc-dvd.iso
-#   CDROM      ISO to attach in "run" mode         (none)
+#   CDROM      ISO in the CD drive in "run" mode   (empty drive)
 #   MEM        guest RAM (4G max, see below)       2G
 #   CPU        QEMU CPU model (qemu -cpu help)     TI-UltraSparc-IIi
 #   CPUS       CPU count, up to 4 (2 is tested)     1
@@ -19,8 +22,12 @@
 #   MAC        guest MAC address                   QEMU default 52:54:00:12:34:56
 #   NET_OPTS   extra user-net options, e.g. net=10.0.3.0/24,dns=10.0.3.3
 #   NET        full -nic spec, overrides the above (e.g. tap/bridge setups)
+#   CONSOLE_LOG  console log in session mode       console.log ("" for none)
 #   QEMU_OPTS  extra QEMU arguments
 #   DRY_RUN    1 = print the QEMU command instead of running it
+#
+# QEMU's QMP socket is /run/qemu/qmp.sock in every mode; the drives are named disk0
+# (node) and cd0 (device) and the console chardev con, for vmctl.
 set -e
 
 DISK=${DISK:-s10.qcow2}
@@ -30,9 +37,71 @@ CPU=${CPU:-TI-UltraSparc-IIi}
 CPUS=${CPUS:-1}
 NET_MODE=${NET_MODE:-user}
 PORTS=${PORTS-2222:22 1521:1521}
+CONSOLE_LOG=${CONSOLE_LOG-console.log}
+RUN_DIR=/run/qemu
+SESSION=solaris
 
 die() { echo "solaris-sparc64: $*" >&2; exit 1; }
 need() { [ -e "$1" ] || die "$1 not found in $(pwd)"; }
+
+# Run QEMU in window "console" of tmux session $SESSION and wait for it to exit. The
+# container stays up as long as QEMU does; stopping the container quits QEMU.
+session() {
+    sub=${1:-run}
+    [ $# -gt 0 ] && shift
+    case "$sub" in run|install) ;; *) die "session takes run or install, not '$sub'" ;; esac
+    tmux has-session -t "$SESSION" 2>/dev/null && die "a session is already running"
+
+    # Fail here, where the message reaches the container log, on missing files.
+    DRY_RUN=1 "$0" "$sub" "$@" >/dev/null
+
+    mkdir -p "$RUN_DIR"
+    rm -f "$RUN_DIR"/status "$RUN_DIR"/stderr "$RUN_DIR"/restart*
+    SOLARIS_SESSION=1 tmux new-session -d -s "$SESSION" -n console -x 80 -y 24 \
+        "$0" console-loop "$sub" "$@"
+    tmux set -g window-size manual
+
+    trap 'rm -f "$RUN_DIR"/restart*; vmctl quit >/dev/null 2>&1 || tmux kill-server 2>/dev/null' TERM INT
+    echo "solaris-sparc64: $sub session started; attach with: attach (via exec -it)"
+    while tmux has-session -t "$SESSION" 2>/dev/null; do
+        sleep 1 &
+        wait $! || true
+    done
+    cat "$RUN_DIR/stderr" >&2 2>/dev/null || true
+    status=$(cat "$RUN_DIR/status" 2>/dev/null || echo 1)
+    echo "solaris-sparc64: QEMU exited with status $status"
+    exit "$status"
+}
+
+# The session's console pane: run QEMU, and start it again while "vmctl restart" asks
+# for it. A restart is a power cycle (QEMU's own system_reset crashes OpenBIOS once
+# Solaris has run). The disc in the drive stays; restart.revert names a disk snapshot
+# to go back to first. (Snapshots with VM state don't work: sun4u Solaris hangs once
+# restored, whether with loadvm or -loadvm.)
+console_loop() {
+    sub=$1
+    shift
+    while :; do
+        rm -f "$RUN_DIR"/restart
+        status=0
+        "$0" "$sub" "$@" 2>"$RUN_DIR/stderr" || status=$?
+        [ -e "$RUN_DIR/restart" ] || break
+        cd_file=$(cat "$RUN_DIR/restart.cd" 2>/dev/null || true)
+        if [ "$sub" = install ]; then
+            [ -n "$cd_file" ] && ISO=$cd_file
+        else
+            CDROM=$cd_file
+        fi
+        export ISO CDROM
+        revert=$(cat "$RUN_DIR/restart.revert" 2>/dev/null || true)
+        rm -f "$RUN_DIR"/restart.*
+        printf '\r\n[solaris-sparc64: restarting QEMU%s]\r\n' "${revert:+ from disk snapshot $revert}"
+        if [ -n "$revert" ] && ! qemu-img snapshot -a "$revert" "${DISK:-s10.qcow2}"; then
+            printf '[solaris-sparc64: could not revert to %s; starting as is]\r\n' "$revert"
+        fi
+    done
+    echo "$status" >"$RUN_DIR/status"
+}
 
 # Up to 4G works. Above 4G OpenBIOS itself crashes at power-on ("Unhandled Exception
 # 0x30"; it relocates itself to the top of RAM). Warn but allow it.
@@ -70,34 +139,62 @@ fi
 # OpenBIOS device-tree fixes Solaris needs, loaded as nvramrc (see the file).
 forth=$(grep -v -E '^[[:space:]]*[\]' /usr/share/qemu/openbios-fixes.fth | tr -d '\r' | tr '\n' ' ')
 
+# The CD drive (ide1 master) is always there, so vmctl can change the disc.
+cd_drive=if=ide,bus=1,unit=0,media=cdrom,id=cd0,readonly=on
+
 mode=${1:-run}
 case "$mode" in
 run)
     shift || true
     need "$DISK"
-    set -- -prom-env 'boot-device=disk:a' "$@"
     if [ -n "$CDROM" ]; then
         need "$CDROM"
-        set -- -drive "file=$CDROM,if=ide,bus=1,unit=0,media=cdrom,readonly=on" "$@"
+        cd_drive="$cd_drive,file=$CDROM"
     fi
+    set -- -prom-env 'boot-device=disk:a' "$@"
     ;;
 install)
     shift
     need "$DISK"
     need "$ISO"
-    set -- -cdrom "$ISO" -prom-env 'boot-device=cdrom:f' "$@"
+    cd_drive="$cd_drive,file=$ISO"
+    set -- -prom-env 'boot-device=cdrom:f' "$@"
+    ;;
+session)
+    shift
+    session "$@"
+    ;;
+console-loop)
+    shift
+    console_loop "$@"
+    exit
     ;;
 *)
     exec "$@"
     ;;
 esac
 
+# The console is ttya on stdio. Run directly, it is multiplexed so Ctrl-A x quits and
+# Ctrl-A b sends a break. In a session every key goes to the guest (vmctl does those
+# jobs) and the output is also logged.
+if [ "$SOLARIS_SESSION" = 1 ]; then
+    console=stdio,id=con,mux=off,signal=off
+    [ -n "$CONSOLE_LOG" ] && console="$console,logfile=$CONSOLE_LOG,logappend=on"
+else
+    console=stdio,id=con,mux=on,signal=off
+fi
+[ "$DRY_RUN" = 1 ] || mkdir -p "$RUN_DIR"
+
 # QEMU_OPTS is split on whitespace on purpose.
 # shellcheck disable=SC2086
 set -- qemu-system-sparc64 -M sun4u -cpu "$CPU" -smp "$CPUS" -m "$MEM" \
-    -nographic -vga none \
+    -display none -vga none \
+    -chardev "$console" -serial chardev:con \
+    -qmp "unix:$RUN_DIR/qmp.sock,server=on,wait=off" \
+    -qmp "unix:$RUN_DIR/qmp-status.sock,server=on,wait=off" \
     -nic "$NET" \
-    -drive "file=$DISK,if=ide,bus=0,unit=0" \
+    -drive "file=$DISK,if=ide,bus=0,unit=0,node-name=disk0" \
+    -drive "$cd_drive" \
     -prom-env 'auto-boot?=true' \
     -prom-env 'use-nvramrc?=true' \
     -prom-env "nvramrc=$forth" \
