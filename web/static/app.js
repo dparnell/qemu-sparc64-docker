@@ -139,7 +139,9 @@ function render() {
     name.title = s.name;
     const date = document.createElement("div");
     date.className = "date";
-    date.textContent = new Date(s.time * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+    const when = new Date(s.time * 1000);
+    date.textContent = when.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    date.title = when.toLocaleString();
     label.append(name, date);
     const restore = document.createElement("button");
     restore.textContent = "Restore";

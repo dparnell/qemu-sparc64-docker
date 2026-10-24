@@ -4,6 +4,8 @@ A small Alpine image with `qemu-system-sparc64` (sun4u) and `qemu-img`, built fr
 [dparnell/qemu `sun4u-solaris10`](https://github.com/dparnell/qemu/tree/sun4u-solaris10),
 for running Solaris 10 1/13 (SPARC).
 
+![Web console: Solaris 10 on two emulated UltraSPARC-IIi CPUs, with CD, power and snapshot controls](docs/web-console.png)
+
 The fork carries two IDE fixes Solaris needs:
 
 - **CMD646 interrupt status latching**: without it Solaris' `uata` driver logs
