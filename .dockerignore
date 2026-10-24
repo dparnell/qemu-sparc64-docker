@@ -3,3 +3,5 @@
 !solaris-sparc64
 !vmctl
 !tmux.conf
+!web
+web/static/vendor

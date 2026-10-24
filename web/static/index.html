@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solaris Console</title>
+<link rel="stylesheet" href="vendor/xterm.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header>
+  <h1>Solaris SPARC</h1>
+  <span id="state" class="pill" data-state="connecting">connecting</span>
+  <span id="cd-now" class="muted"></span>
+</header>
+
+<main>
+  <section id="term-wrap" aria-label="Serial console">
+    <div id="term"></div>
+    <div id="offline" hidden>
+      <p id="offline-text">Waiting for the VM session…</p>
+    </div>
+  </section>
+
+  <aside>
+    <section class="panel">
+      <h2>Console</h2>
+      <div class="row">
+        <button data-action="break" title="Serial break on ttya (Stop-A)">Send break</button>
+        <button id="size-80x24" title="The size the Solaris installer expects">80×24</button>
+        <button id="size-fit" title="Resize the console to this window; then stty rows R columns C in Solaris">Fit window</button>
+      </div>
+      <p class="hint">Size: <span id="size-now">–</span></p>
+    </section>
+
+    <section class="panel">
+      <h2>CD-ROM</h2>
+      <div class="row">
+        <select id="iso" aria-label="Disc image"></select>
+      </div>
+      <div class="row">
+        <button id="cd-insert">Insert</button>
+        <button data-action="eject">Eject</button>
+      </div>
+      <p class="hint">OpenBIOS only sees the disc that was in at power-on: to boot from it, insert it and restart.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Power</h2>
+      <div class="row">
+        <button id="pause">Pause</button>
+        <button data-action="restart" data-confirm="Power cycle the VM? Unsaved work in Solaris is lost.">Restart</button>
+      </div>
+      <div class="row">
+        <button data-action="powerdown" data-confirm="Press the power button?">Power button</button>
+        <button class="danger" data-action="quit" data-confirm="Kill QEMU now, without shutting Solaris down?">Quit QEMU</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Disk snapshots</h2>
+      <form id="snap-form" class="row">
+        <input id="snap-name" placeholder="name" pattern="[A-Za-z0-9._\-]+" required
+               title="Letters, digits, . _ -" aria-label="Snapshot name">
+        <button type="submit">Save</button>
+      </form>
+      <ul id="snaps"></ul>
+      <p class="hint">Cleanest with Solaris at the <code>ok</code> prompt (<code>init 0</code>). Restoring power cycles the VM.</p>
+    </section>
+  </aside>
+</main>
+
+<div id="toasts" aria-live="polite"></div>
+
+<script src="vendor/xterm.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -67,7 +67,7 @@ json_str() { jq -n --arg s "$1" '$s'; }
 snapshots() {
     cmd query-named-block-nodes '{"flat":true}' |
         jq -r '.[] | select(."node-name" == "disk0") | .image.snapshots // [] | .[] |
-            "\(.name)\t\(."date-sec" | strftime("%Y-%m-%d %H:%M"))"'
+            "\(.name)\t\(."date-sec" | strftime("%Y-%m-%d %H:%M UTC"))"'
 }
 
 # QEMU closes the socket as it quits, often before answering.
@@ -224,6 +224,22 @@ status)
     echo "CD:        ${cdf:-empty}"
     echo "Snapshots:"
     snapshots | sed 's/^/  /'
+    ;;
+status-json)
+    # For vmweb: state, CD, snapshots and the ISOs on offer, as one JSON object.
+    QMP_SOCK=$RUN_DIR/qmp-status.sock
+    iso_list=$(isos | jq -R . | jq -s -c .)
+    st=stopped cdf= snaps='[]'
+    if [ -S "$QMP_SOCK" ] && st=$(cmd query-status 2>/dev/null | jq -r '.status'); then
+        cdf=$(cd_file 2>/dev/null) || cdf=
+        snaps=$(cmd query-named-block-nodes '{"flat":true}' 2>/dev/null | jq -c '[.[] |
+            select(."node-name" == "disk0") | (.image.snapshots // [])[] |
+            {name, time: ."date-sec"}]') || snaps='[]'
+    else
+        st=stopped
+    fi
+    jq -n -c --arg status "$st" --arg cd "$cdf" --argjson snapshots "${snaps:-[]}" \
+        --argjson isos "$iso_list" '{$status, $cd, $snapshots, $isos}'
     ;;
 statusline)
     QMP_SOCK=$RUN_DIR/qmp-status.sock

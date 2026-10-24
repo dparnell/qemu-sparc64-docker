@@ -126,9 +126,34 @@ container exec s10 vmctl status          # or any other vmctl command, see vmctl
 - **CD changes:** Solaris sees a new disc at once (vold mounts it under `/cdrom`).
   OpenBIOS only sees the disc that was in the drive at power-on, so to boot from a
   different disc, change it and restart.
+- **Web console:** the session also serves the console and the same controls on port
+  8080 (see below).
 - **Stopping:** shut Solaris down first (`init 0`, to the `ok` prompt), then quit QEMU
   from the menu or `container stop`. Stopping the container quits QEMU at once, like
   pulling the plug.
+
+### Web console
+
+In session mode `vmweb` serves a browser console on port 8080 (`WEB_PORT`, empty to
+turn it off): the serial console in a terminal (xterm.js) plus buttons for the CD,
+power, disk snapshots, break and console size. Publish the port on localhost and open
+<http://localhost:8080/>:
+
+```sh
+container run -d --name s10 -m 3G -c 2 -v "$PWD:/vm" -p 127.0.0.1:2222:2222 \
+    -p 127.0.0.1:8080:8080 qemu-sparc64-solaris session
+```
+
+It is the same tmux session as `attach`, through tmux control mode, so a terminal and
+any number of browsers can share the console; a browser that connects or reconnects
+starts from a capture of the screen and scrollback. Keys go to the guest as typed,
+Ctrl-C included (browser shortcuts such as Cmd-W still belong to the browser).
+
+The console has no login of its own and gives root on the guest's console, so keep it
+on localhost. Apple `container` also makes the container's own IP reachable from the
+Mac, so set `WEB_TOKEN` to require a token: open `http://localhost:8080/?token=...`
+once and a cookie keeps you in. Without a token it only answers to `localhost` and IP
+addresses (add host names with `WEB_HOSTS`), against DNS rebinding.
 
 ### Settings
 
@@ -148,6 +173,9 @@ Pass these with `-e NAME=value`:
 | `NET_OPTS` | | extra user-mode options, e.g. `net=10.0.3.0/24` |
 | `NET` | | full QEMU `-nic` spec; overrides `NET_MODE`/`PORTS`/`MAC`/`NET_OPTS` |
 | `CONSOLE_LOG` | `console.log` | console log in session mode; empty for none |
+| `WEB_PORT` | `8080` | web console port in session mode; empty for none |
+| `WEB_TOKEN` | | token the web console requires |
+| `WEB_HOSTS` | | extra host names the web console answers to without a token |
 | `QEMU_OPTS` | | extra QEMU arguments |
 | `DRY_RUN` | | `1` prints the QEMU command instead of running it |
 

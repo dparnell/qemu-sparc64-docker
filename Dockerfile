@@ -38,6 +38,21 @@ RUN mkdir -p /out/usr/bin /out/usr/share/qemu \
         | tr ',' '\n' | sort -u | sed 's/^/so:/' > /out/runtime-deps \
     && git -C .. log -1 --format='%H %s' > /out/usr/share/qemu/BUILD-REVISION
 
+# The web console (vmweb, see web/), with xterm.js embedded.
+FROM golang:1.24-alpine${ALPINE_VERSION} AS web
+
+ARG XTERM_VERSION=6.0.0
+ARG XTERM_SHA256=908e66e04af6c8dc6b00dd3b54de088e2e81e5ed866284fd6c2fb3c2d1c7a3f6
+
+WORKDIR /src
+COPY web/ ./
+RUN wget -q -O /tmp/xterm.tgz "https://registry.npmjs.org/@xterm/xterm/-/xterm-${XTERM_VERSION}.tgz" \
+    && echo "${XTERM_SHA256}  /tmp/xterm.tgz" | sha256sum -c - \
+    && tar -xzf /tmp/xterm.tgz -C /tmp \
+    && mkdir -p static/vendor \
+    && cp /tmp/package/lib/xterm.js /tmp/package/css/xterm.css static/vendor/ \
+    && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/vmweb .
+
 FROM alpine:${ALPINE_VERSION}
 
 COPY --from=build /out/runtime-deps /tmp/runtime-deps
@@ -47,6 +62,7 @@ RUN apk add --no-cache $(cat /tmp/runtime-deps) jq socat tmux && rm /tmp/runtime
 COPY --from=build /out/usr/ /usr/
 COPY openbios-fixes.fth /usr/share/qemu/openbios-fixes.fth
 COPY --chmod=0755 solaris-sparc64 vmctl /usr/bin/
+COPY --from=web /out/vmweb /usr/bin/vmweb
 COPY tmux.conf /etc/tmux.conf
 RUN ln -s vmctl /usr/bin/attach
 
@@ -54,7 +70,7 @@ RUN ln -s vmctl /usr/bin/attach
 # forwarded to these container ports (publish them with -p; change them with PORTS).
 WORKDIR /vm
 VOLUME /vm
-EXPOSE 2222 1521
+EXPOSE 2222 1521 8080
 
 ENTRYPOINT ["/usr/bin/solaris-sparc64"]
 CMD ["run"]

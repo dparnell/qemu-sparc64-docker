@@ -23,6 +23,8 @@
 #   NET_OPTS   extra user-net options, e.g. net=10.0.3.0/24,dns=10.0.3.3
 #   NET        full -nic spec, overrides the above (e.g. tap/bridge setups)
 #   CONSOLE_LOG  console log in session mode       console.log ("" for none)
+#   WEB_PORT   web console port in session mode    8080 ("" for none)
+#   WEB_TOKEN  token the web console requires      (none)
 #   QEMU_OPTS  extra QEMU arguments
 #   DRY_RUN    1 = print the QEMU command instead of running it
 #
@@ -38,6 +40,7 @@ CPUS=${CPUS:-1}
 NET_MODE=${NET_MODE:-user}
 PORTS=${PORTS-2222:22 1521:1521}
 CONSOLE_LOG=${CONSOLE_LOG-console.log}
+WEB_PORT=${WEB_PORT-8080}
 RUN_DIR=/run/qemu
 SESSION=solaris
 
@@ -63,10 +66,17 @@ session() {
 
     trap 'rm -f "$RUN_DIR"/restart*; vmctl quit >/dev/null 2>&1 || tmux kill-server 2>/dev/null' TERM INT
     echo "solaris-sparc64: $sub session started; attach with: attach (via exec -it)"
+    web_pid=
+    if [ -n "$WEB_PORT" ] && command -v vmweb >/dev/null; then
+        vmweb -listen ":$WEB_PORT" &
+        web_pid=$!
+        echo "solaris-sparc64: web console on port $WEB_PORT"
+    fi
     while tmux has-session -t "$SESSION" 2>/dev/null; do
         sleep 1 &
         wait $! || true
     done
+    [ -n "$web_pid" ] && kill "$web_pid" 2>/dev/null
     cat "$RUN_DIR/stderr" >&2 2>/dev/null || true
     status=$(cat "$RUN_DIR/status" 2>/dev/null || echo 1)
     echo "solaris-sparc64: QEMU exited with status $status"
