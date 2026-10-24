@@ -30,7 +30,8 @@ register the firmware's `SUNW,start-cpu` uses, UltraSPARC-II cross-CPU interrupt
 ## Build
 
 ```sh
-docker build -t qemu-sparc64-solaris .
+docker build -t qemu-sparc64-solaris .        # Docker
+container build -t qemu-sparc64-solaris .     # Apple container
 ```
 
 Build arguments: `QEMU_REPO` (default the fork over https), `QEMU_REF` (branch or
@@ -42,7 +43,7 @@ tag, default `sun4u-solaris10`), `ALPINE_VERSION`.
 `sparc64-linux-gnu` cross compiler for OpenBIOS, `xsltproc` and `gdb-multiarch`), so
 nothing has to be installed on the host. `buildenv/sparc-build` runs a command in it as
 your user, with `$HOME` (and the current directory, if outside it) mounted at the same
-path; it builds the image on first use.
+path; it builds the image on first use. It uses Docker.
 
 ```sh
 cd ~/fork/qemu/build && ~/fork/qemu-sparc64-docker/buildenv/sparc-build ninja qemu-system-sparc64
@@ -55,6 +56,8 @@ SPARC_BUILD_REBUILD=1 ~/fork/qemu-sparc64-docker/buildenv/sparc-build true   # r
 Put the disk image and DVD ISO in a directory and mount it at `/vm`. Use `-it`: the
 Solaris console is the container's terminal. Quit QEMU with Ctrl-A then X.
 
+With Docker:
+
 ```sh
 # create a disk
 docker run --rm -v "$PWD:/vm" qemu-sparc64-solaris qemu-img create -f qcow2 s10.qcow2 64G
@@ -66,39 +69,52 @@ docker run --rm -it -v "$PWD:/vm" qemu-sparc64-solaris install
 docker run --rm -it -v "$PWD:/vm" -p 2222:2222 -p 1521:1521 qemu-sparc64-solaris
 ```
 
-### macOS (Apple silicon) with Apple `container`
-
-The image builds natively for arm64 with Apple's
-[`container`](https://github.com/apple/container) tool, which runs each container in its
-own lightweight VM. Its commands mirror Docker's. Each container VM gets 1 GiB of RAM by
-default, so give it more than the guest's `MEM` with `-m`, and use `-c` for CPUs:
+With Apple `container` (set up as below):
 
 ```sh
-brew install container
-brew services start container
-container system kernel set --recommended     # once
-
-container build -t qemu-sparc64-solaris .
 container run --rm -v "$PWD:/vm" qemu-sparc64-solaris qemu-img create -f qcow2 s10.qcow2 64G
 container run --rm -it -m 3G -c 2 -v "$PWD:/vm" qemu-sparc64-solaris install
 container run --rm -it -m 3G -c 2 -v "$PWD:/vm" -p 2222:2222 -p 1521:1521 qemu-sparc64-solaris
 ```
 
-With `MEM=4G` use `-m 5G` or more.
+### Apple `container` (macOS on Apple silicon)
+
+Apple's [`container`](https://github.com/apple/container) tool runs each container in
+its own lightweight VM, and the image builds natively for arm64 with it. Its commands
+mirror Docker's, so every example here shows both. Set it up once:
+
+```sh
+brew install container
+brew services start container
+container system kernel set --recommended
+```
+
+Each container VM gets 1 GiB of RAM by default, so give it more than the guest's `MEM`
+with `-m` (`-m 3G` for the default `MEM=2G`, `-m 5G` or more with `MEM=4G`), and CPUs
+with `-c`.
 
 ### Session mode: run in the background, attach to the console
 
 `session` (or `session install`) runs QEMU in a tmux session inside the container, so
-the VM keeps running with nobody attached and you can attach and detach at will:
+the VM keeps running with nobody attached and you can attach and detach at will.
+
+With Docker:
+
+```sh
+docker run -d --name s10 -v "$PWD:/vm" \
+    -p 127.0.0.1:2222:2222 -p 127.0.0.1:1521:1521 qemu-sparc64-solaris session
+docker exec -it s10 attach               # Ctrl-B d detaches, Ctrl-B m opens the menu
+docker exec s10 vmctl status             # or any other vmctl command, see vmctl help
+```
+
+With Apple `container`:
 
 ```sh
 container run -d --name s10 -m 3G -c 2 -v "$PWD:/vm" \
     -p 127.0.0.1:2222:2222 -p 127.0.0.1:1521:1521 qemu-sparc64-solaris session
-container exec -it s10 attach            # Ctrl-B d detaches, Ctrl-B m opens the menu
-container exec s10 vmctl status          # or any other vmctl command, see vmctl help
+container exec -it s10 attach
+container exec s10 vmctl status
 ```
-
-(With Docker: `docker run -d ... session` and `docker exec -it s10 attach`.)
 
 - **Console:** window `console` is the guest's serial console. Every key goes to the
   guest, Ctrl-C, Ctrl-Z and Ctrl-A included; nothing typed there can stop QEMU. Choose
@@ -130,8 +146,8 @@ container exec s10 vmctl status          # or any other vmctl command, see vmctl
 - **Web console:** the session also serves the console and the same controls on port
   8080 (see below).
 - **Stopping:** shut Solaris down first (`init 0`, to the `ok` prompt), then quit QEMU
-  from the menu or `container stop`. Stopping the container quits QEMU at once, like
-  pulling the plug.
+  from the menu or with `docker stop s10` / `container stop s10`. Stopping the
+  container quits QEMU at once, like pulling the plug.
 
 ### Web console
 
@@ -141,6 +157,11 @@ power, disk snapshots, break and console size. Publish the port on localhost and
 <http://localhost:8080/>:
 
 ```sh
+# Docker
+docker run -d --name s10 -v "$PWD:/vm" -p 127.0.0.1:2222:2222 \
+    -p 127.0.0.1:8080:8080 qemu-sparc64-solaris session
+
+# Apple container
 container run -d --name s10 -m 3G -c 2 -v "$PWD:/vm" -p 127.0.0.1:2222:2222 \
     -p 127.0.0.1:8080:8080 qemu-sparc64-solaris session
 ```
@@ -196,12 +217,21 @@ Notes:
 - **Networking:** with `NET_MODE=user` the guest gets `10.0.2.15` by DHCP (gateway
   `10.0.2.2`, DNS `10.0.2.3`) and can reach out, but nothing can connect in except the
   `PORTS` forwards. Each forward listens on the container port; publish it with `-p`,
-  e.g. `-e PORTS="2222:22 8080:80" -p 2222:2222 -p 8080:8080`. In the installer, answer
+  e.g. `-e PORTS="2222:22 8000:80" -p 2222:2222 -p 8000:8000` (8080 is the web
+  console's in session mode). In the installer, answer
   DHCP for `hme0`.
 
 Example, a second VM with its own disk, MAC and ports:
 
 ```sh
+# Docker
 docker run --rm -it -v "$PWD:/vm" -e DISK=s10-b.qcow2 -e MAC=52:54:00:12:34:57 \
     -e PORTS="2223:22 1522:1521" -p 2223:2223 -p 1522:1522 qemu-sparc64-solaris
+
+# Apple container
+container run --rm -it -m 3G -c 2 -v "$PWD:/vm" -e DISK=s10-b.qcow2 -e MAC=52:54:00:12:34:57 \
+    -e PORTS="2223:22 1522:1521" -p 2223:2223 -p 1522:1522 qemu-sparc64-solaris
 ```
+
+In session mode give each VM its own web console port too, e.g.
+`-e WEB_PORT=8081 -p 127.0.0.1:8081:8081`.
