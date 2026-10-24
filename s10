@@ -1,0 +1,289 @@
+#!/bin/sh
+# Run Solaris 10 SPARC in the qemu-sparc64-solaris image from the host, with whichever
+# container runtime is available (Apple container, Docker or Podman; see
+# scripts/runtime.sh).
+#
+#   ./s10 build               build the image (other commands build it when missing)
+#   ./s10 disk [SIZE]         create the disk image, default 64G
+#   ./s10 install             boot the installer DVD in a session and attach to it
+#   ./s10 start               boot the installed system in a background session
+#   ./s10 attach              attach to the console (Ctrl-B d detaches, Ctrl-B m menu)
+#   ./s10 web                 open the web console
+#   ./s10 status              container and VM status
+#   ./s10 stop [-y]           quit QEMU and remove the container
+#   ./s10 run [install]       boot in the foreground instead (Ctrl-A x quits)
+#   ./s10 logs | shell        container log, or a shell in the container
+#   ./s10 runtime             show which runtime is used
+#   ./s10 cd FILE | eject | break | pause | resume | restart | snapshots
+#         snapshot-save NAME | snapshot-load NAME | snapshot-delete NAME | qmp JSON
+#                             control the running VM (see vmctl in the README)
+#
+# Set in the environment:
+#   VM_DIR    directory with the disk and ISOs, mounted at /vm   current directory
+#   MEDIA_DIR another directory of ISOs, mounted read-only at /vm/media (refer to its
+#             files as media/NAME, e.g. ISO=media/sol-10-u11-ga-sparc-dvd.iso)
+#   NAME      container name                                     s10
+#   IMAGE     image name                                         qemu-sparc64-solaris
+#   BIND      host address the published ports listen on         127.0.0.1
+#   RUNTIME   docker | podman | container                        picked automatically
+# and the image's own settings (DISK, ISO, MEM, CPUS, PORTS, WEB_PORT, WEB_TOKEN, ...;
+# see the README), which are passed to the container.
+set -e
+
+here=$(cd "$(dirname "$0")" && pwd)
+. "$here/scripts/runtime.sh"
+
+VM_DIR=$(cd "${VM_DIR:-.}" 2>/dev/null && pwd) || rt_die "VM_DIR '${VM_DIR}' is not a directory"
+if [ -n "$MEDIA_DIR" ]; then
+    MEDIA_DIR=$(cd "$MEDIA_DIR" 2>/dev/null && pwd) || rt_die "MEDIA_DIR '$MEDIA_DIR' is not a directory"
+fi
+NAME=${NAME:-s10}
+IMAGE=${IMAGE:-qemu-sparc64-solaris}
+BIND=${BIND:-127.0.0.1}
+DISK=${DISK:-s10.qcow2}
+ISO=${ISO:-sol-10-u11-ga-sparc-dvd.iso}
+PORTS=${PORTS-2222:22 1521:1521}
+WEB_PORT=${WEB_PORT-8080}
+
+# Image settings passed through to the container when set.
+PASS="DISK ISO CDROM MEM CPU CPUS NET_MODE PORTS MAC NET_OPTS NET CONSOLE_LOG
+WEB_PORT WEB_TOKEN WEB_HOSTS QEMU_OPTS DRY_RUN"
+
+die() { rt_die "$@"; }
+say() { echo "${0##*/}: $*"; }
+
+usage() { sed -n '2,/^set -e/p' "$0" | sed -e '/^set -e/d' -e 's/^# \{0,1\}//'; }
+
+ensure_image() {
+    rt_image_exists "$IMAGE" && return
+    say "building $IMAGE with $RUNTIME (first use; this takes a few minutes)"
+    "$RUNTIME" build -t "$IMAGE" "$here"
+}
+
+need_running() {
+    [ "$(rt_state "$NAME")" = running ] ||
+        die "$NAME is not running (start it with ./s10 start or ./s10 install)"
+}
+
+# The run arguments shared by session and foreground runs, quoted for eval.
+run_args() {
+    args="-v $(quote "$VM_DIR:/vm")"
+    if [ -n "$MEDIA_DIR" ]; then
+        args="$args $(rt_ro_flag) $(quote "$(rt_ro_spec "$MEDIA_DIR" /vm/media)")"
+    fi
+    size=$(rt_vm_size "${MEM:-2G}" "${CPUS:-1}")
+    [ -n "$size" ] && args="$args $size"
+    for p in $(echo "$PORTS" | tr ',' ' '); do
+        proto=tcp
+        case "$p" in tcp:*|udp:*) proto=${p%%:*}; p=${p#*:} ;; esac
+        h=${p%%:*}
+        suffix=
+        [ "$proto" = udp ] && suffix=/udp
+        args="$args -p $BIND:$h:$h$suffix"
+    done
+    isset='' val=''
+    for v in $PASS; do
+        eval "isset=\${$v+x} val=\${$v}"
+        [ -n "$isset" ] && args="$args -e $(quote "$v=$val")"
+    done
+    echo "$args"
+}
+
+# Single-quote a string for eval.
+quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+start_session() {
+    mode=$1
+    case "$(rt_state "$NAME")" in
+    running) die "$NAME is already running (./s10 attach, or ./s10 stop first)" ;;
+    stopped) "$RUNTIME" rm "$NAME" >/dev/null ;;
+    esac
+    [ -f "$(host_path "$DISK")" ] || die "no disk $DISK in $VM_DIR (create one with ./s10 disk)"
+    ensure_image
+    web=
+    [ -n "$WEB_PORT" ] && web="-p $BIND:$WEB_PORT:$WEB_PORT"
+    eval "set -- run -d --name $(quote "$NAME") $(run_args) $web $(quote "$IMAGE") session $mode"
+    "$RUNTIME" "$@" >/dev/null
+
+    # Wait for the tmux session, so attach and vmctl work as soon as this returns.
+    i=0
+    until "$RUNTIME" exec "$NAME" tmux has-session -t solaris 2>/dev/null; do
+        i=$((i + 1))
+        if [ "$(rt_state "$NAME")" != running ] || [ $i -gt 30 ]; then
+            "$RUNTIME" logs "$NAME" >&2 2>&1 || true
+            die "the session did not start"
+        fi
+        sleep 1
+    done
+    say "$NAME is running ($mode, $RUNTIME)"
+    say "  console:      ./s10 attach   (Ctrl-B d detaches, Ctrl-B m opens the menu)"
+    if [ -n "$WEB_PORT" ]; then
+        say "  web console:  $(web_url)"
+    fi
+    for p in $(echo "$PORTS" | tr ',' ' '); do
+        p=${p#tcp:}
+        if [ "${p#*:}" = 22 ]; then
+            say "  ssh:          ssh -p ${p%%:*} root@localhost   (once Solaris is up)"
+        fi
+    done
+}
+
+web_url() {
+    url="http://localhost:$WEB_PORT/"
+    [ "$BIND" = 127.0.0.1 ] || [ "$BIND" = localhost ] || url="http://$BIND:$WEB_PORT/"
+    [ -n "$WEB_TOKEN" ] && url="${url}?token=$WEB_TOKEN"
+    echo "$url"
+}
+
+attach() {
+    need_running
+    "$RUNTIME" exec -it -e "TERM=${TERM:-xterm-256color}" "$NAME" attach
+}
+
+# The host path of a file the container sees as /vm/$1.
+host_path() {
+    case "$1" in
+    media/*) [ -n "$MEDIA_DIR" ] && echo "$MEDIA_DIR/${1#media/}" ;;
+    *) echo "$VM_DIR/$1" ;;
+    esac
+}
+
+# vmctl takes paths inside the container; accept a name relative to /vm (media/...
+# for MEDIA_DIR) or a host path under VM_DIR or MEDIA_DIR.
+vm_path() {
+    case "$1" in
+    "$VM_DIR"/*) f=${1#"$VM_DIR"/} ;;
+    "$MEDIA_DIR"/*) [ -n "$MEDIA_DIR" ] && f=media/${1#"$MEDIA_DIR"/} ;;
+    /*) die "$1 is not under VM_DIR ($VM_DIR)${MEDIA_DIR:+ or MEDIA_DIR ($MEDIA_DIR)}" ;;
+    *) f=$1 ;;
+    esac
+    [ -f "$(host_path "$f")" ] || die "$f not found"
+    echo "$f"
+}
+
+stop() {
+    yes=
+    [ "$1" != -y ] || yes=1
+    case "$(rt_state "$NAME")" in
+    absent) say "$NAME is not running"; return ;;
+    stopped) "$RUNTIME" rm "$NAME" >/dev/null; say "removed the stopped container $NAME"; return ;;
+    esac
+    if [ -z "$yes" ] && [ -t 0 ]; then
+        printf 'Quit QEMU now? Shut Solaris down first (init 0) to keep its file systems clean. [y/N] '
+        read -r answer
+        case "$answer" in [yY]*) ;; *) say "not stopped"; return ;; esac
+    fi
+    "$RUNTIME" exec "$NAME" vmctl quit 2>/dev/null || true
+    i=0
+    while [ "$(rt_state "$NAME")" = running ] && [ $i -lt 20 ]; do
+        sleep 1
+        i=$((i + 1))
+    done
+    if [ "$(rt_state "$NAME")" = running ]; then
+        "$RUNTIME" stop "$NAME" >/dev/null
+    fi
+    "$RUNTIME" rm "$NAME" >/dev/null 2>&1 || true
+    say "stopped $NAME"
+}
+
+[ $# -gt 0 ] || { usage; exit 1; }
+cmd=$1
+shift
+case "$cmd" in help|-h|--help) usage; exit 0 ;; esac
+
+rt_pick
+case "$cmd" in
+runtime)
+    echo "$RUNTIME"
+    exit 0
+    ;;
+esac
+rt_ready
+
+case "$cmd" in
+build)
+    "$RUNTIME" build -t "$IMAGE" "$@" "$here"
+    ;;
+disk)
+    size=${1:-64G}
+    [ -e "$VM_DIR/$DISK" ] && die "$VM_DIR/$DISK already exists"
+    ensure_image
+    "$RUNTIME" run --rm -v "$VM_DIR:/vm" "$IMAGE" qemu-img create -f qcow2 "$DISK" "$size"
+    ;;
+install)
+    [ -f "$(host_path "$ISO")" ] || die "no installer DVD $ISO in $VM_DIR (set ISO=..., or MEDIA_DIR and ISO=media/...)"
+    if [ ! -e "$VM_DIR/$DISK" ]; then
+        say "creating $DISK (${DISK_SIZE:-64G})"
+        ensure_image
+        "$RUNTIME" run --rm -v "$VM_DIR:/vm" "$IMAGE" qemu-img create -q -f qcow2 "$DISK" "${DISK_SIZE:-64G}"
+    fi
+    start_session install
+    if [ -t 0 ] && [ -t 1 ]; then
+        say "attaching to the installer console in 3 seconds..."
+        sleep 3
+        attach
+    fi
+    ;;
+start)
+    start_session run
+    ;;
+attach)
+    attach
+    ;;
+web)
+    need_running
+    [ -n "$WEB_PORT" ] || die "the web console is off (WEB_PORT is empty)"
+    url=$(web_url)
+    if command -v open >/dev/null && [ "$(uname -s)" = Darwin ]; then
+        open "$url"
+    elif command -v xdg-open >/dev/null; then
+        xdg-open "$url" >/dev/null 2>&1 &
+    fi
+    echo "$url"
+    ;;
+status)
+    state=$(rt_state "$NAME")
+    echo "Runtime:   $RUNTIME"
+    echo "Container: $NAME ($state)"
+    if [ "$state" = running ]; then
+        "$RUNTIME" exec "$NAME" vmctl status
+        if [ -n "$WEB_PORT" ]; then
+            echo "Web:       $(web_url)"
+        fi
+    fi
+    ;;
+stop)
+    stop "$@"
+    ;;
+run)
+    mode=${1:-run}
+    case "$mode" in run|install) ;; *) die "usage: ./s10 run [install]" ;; esac
+    [ "$(rt_state "$NAME")" = running ] && die "$NAME is already running"
+    ensure_image
+    tty=
+    [ -t 0 ] && [ -t 1 ] && tty=-it
+    eval "set -- run --rm $tty $(run_args) $(quote "$IMAGE") $mode"
+    exec "$RUNTIME" "$@"
+    ;;
+logs)
+    "$RUNTIME" logs "$NAME"
+    ;;
+shell)
+    need_running
+    "$RUNTIME" exec -it "$NAME" sh
+    ;;
+cd)
+    [ $# -eq 1 ] || die "usage: ./s10 cd FILE"
+    need_running
+    f=$(vm_path "$1") || exit 1
+    "$RUNTIME" exec "$NAME" vmctl cd "$f"
+    ;;
+eject|break|pause|resume|restart|snapshots|snapshot-save|snapshot-load|snapshot-delete|qmp)
+    need_running
+    "$RUNTIME" exec "$NAME" vmctl "$cmd" "$@"
+    ;;
+*)
+    usage >&2
+    exit 1
+    ;;
+esac

@@ -30,6 +30,7 @@ register the firmware's `SUNW,start-cpu` uses, UltraSPARC-II cross-CPU interrupt
 ## Build
 
 ```sh
+./s10 build                                   # whichever runtime is available
 docker build -t qemu-sparc64-solaris .        # Docker
 container build -t qemu-sparc64-solaris .     # Apple container
 ```
@@ -43,7 +44,8 @@ tag, default `sun4u-solaris10`), `ALPINE_VERSION`.
 `sparc64-linux-gnu` cross compiler for OpenBIOS, `xsltproc` and `gdb-multiarch`), so
 nothing has to be installed on the host. `buildenv/sparc-build` runs a command in it as
 your user, with `$HOME` (and the current directory, if outside it) mounted at the same
-path; it builds the image on first use. It uses Docker.
+path; it builds the image on first use. Like `./s10`, it uses Apple `container`, Docker
+or Podman, whichever is available (`RUNTIME=` picks).
 
 ```sh
 cd ~/fork/qemu/build && ~/fork/qemu-sparc64-docker/buildenv/sparc-build ninja qemu-system-sparc64
@@ -52,6 +54,35 @@ SPARC_BUILD_REBUILD=1 ~/fork/qemu-sparc64-docker/buildenv/sparc-build true   # r
 ```
 
 ## Use
+
+### From the host: `./s10`
+
+`./s10` does all of the below for you with whichever container runtime the host has:
+Apple `container` on an Apple silicon Mac when it's installed, otherwise Docker or
+Podman (whichever is running). `RUNTIME=docker|podman|container` picks one. It builds
+the image on first use, sizes Apple `container`'s VM for the guest, publishes the
+ports on localhost, and passes the image's settings through.
+
+```sh
+cd ~/solaris                 # holds s10.qcow2 and the DVD; or set VM_DIR
+~/qemu-sparc64-docker/s10 install     # creates s10.qcow2 if needed, boots the DVD, attaches
+~/qemu-sparc64-docker/s10 start       # boot the installed system in the background
+~/qemu-sparc64-docker/s10 attach      # console; Ctrl-B d detaches, Ctrl-B m opens the menu
+~/qemu-sparc64-docker/s10 web         # open the web console
+~/qemu-sparc64-docker/s10 status      # container, VM state, CD, snapshots
+~/qemu-sparc64-docker/s10 cd sol-10-u11-ga-sparc-dvd.iso    # or eject, snapshot-save NAME, ...
+~/qemu-sparc64-docker/s10 stop        # quit QEMU (shut Solaris down first) and remove it
+```
+
+`./s10 help` lists every command. Besides the settings below, it reads `VM_DIR` (the
+directory mounted at `/vm`, default the current one), `MEDIA_DIR` (a directory of ISOs
+mounted read-only at `/vm/media`; name its files `media/...`, e.g.
+`ISO=media/sol-10-u11-ga-sparc-dvd.iso`), `NAME` (container name, default `s10`, so
+several VMs can run side by side), `IMAGE` and `BIND` (the address published ports
+listen on, default `127.0.0.1`). `./s10 run [install]` boots in the foreground without
+a session, like the plain commands below.
+
+### By hand
 
 Put the disk image and DVD ISO in a directory and mount it at `/vm`. Use `-it`: the
 Solaris console is the container's terminal. Quit QEMU with Ctrl-A then X.
@@ -224,6 +255,10 @@ Notes:
 Example, a second VM with its own disk, MAC and ports:
 
 ```sh
+# ./s10, in the background next to the first
+NAME=s10b DISK=s10-b.qcow2 MAC=52:54:00:12:34:57 PORTS="2223:22 1522:1521" \
+    WEB_PORT=8081 ./s10 start
+
 # Docker
 docker run --rm -it -v "$PWD:/vm" -e DISK=s10-b.qcow2 -e MAC=52:54:00:12:34:57 \
     -e PORTS="2223:22 1522:1521" -p 2223:2223 -p 1522:1522 qemu-sparc64-solaris

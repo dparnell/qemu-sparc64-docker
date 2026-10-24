@@ -5,13 +5,18 @@
 #   buildenv/sparc-build make -C ~/src/openbios/obj-sparc64
 #   buildenv/sparc-build bash            # interactive shell
 #
-# Builds the image on first use (or with SPARC_BUILD_REBUILD=1).
+# Builds the image on first use (or with SPARC_BUILD_REBUILD=1). Uses Apple container,
+# Docker or Podman, whichever is available (RUNTIME= picks; see ../scripts/runtime.sh).
 set -e
 IMAGE=${SPARC_BUILD_IMAGE:-sparc-buildenv}
 here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=../scripts/runtime.sh
+. "$here/../scripts/runtime.sh"
+rt_pick
+rt_ready
 
-if [ "$SPARC_BUILD_REBUILD" = 1 ] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build -t "$IMAGE" "$here" >&2
+if [ "$SPARC_BUILD_REBUILD" = 1 ] || ! rt_image_exists "$IMAGE"; then
+    "$RUNTIME" build -t "$IMAGE" "$here" >&2
 fi
 
 tty=
@@ -25,7 +30,7 @@ esac
 
 [ $# -eq 0 ] && set -- bash
 # shellcheck disable=SC2086
-exec docker run --rm $tty \
+exec "$RUNTIME" run --rm $tty \
     --user "$(id -u):$(id -g)" \
     -e HOME="$HOME" \
     -v "$HOME:$HOME" $pwdmount \
