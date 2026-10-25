@@ -168,7 +168,7 @@ install)
     need "$DISK"
     need "$ISO"
     cd_drive="$cd_drive,file=$ISO"
-    set -- -prom-env 'boot-device=cdrom:f' "$@"
+    set -- -prom-env 'boot-device=cdrom:d' "$@"
     ;;
 session)
     shift

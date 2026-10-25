@@ -128,8 +128,10 @@ with `-c`.
 
 ### Installing Solaris
 
-- **Booting the DVD:** the installer doesn't start by itself. At the OpenBIOS `0 >`
-  prompt, type:
+- **Booting the DVD:** `install` sets OpenBIOS's boot device to `cdrom:d`, so the
+  installer starts by itself and reaches "Select a Language" in about two minutes. If
+  it stops at the OpenBIOS `0 >` prompt instead (e.g. after booting the DVD from `run`
+  mode with `CDROM`), type:
 
   ```
   boot cdrom:d
