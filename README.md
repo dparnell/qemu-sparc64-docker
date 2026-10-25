@@ -126,6 +126,28 @@ Each container VM gets 1 GiB of RAM by default, so give it more than the guest's
 with `-m` (`-m 3G` for the default `MEM=2G`, `-m 5G` or more with `MEM=4G`), and CPUs
 with `-c`.
 
+### Installing Solaris
+
+- **Booting the DVD:** the installer doesn't start by itself. At the OpenBIOS `0 >`
+  prompt, type:
+
+  ```
+  boot cdrom:d
+  ```
+
+- **Terminal and network:** choose "DEC VT100" or "xterm" as the terminal type, and
+  DHCP for `hme0`.
+- **"Not valid install media":** part way through, the installer may complain that the
+  DVD does not contain valid Solaris install media. If it does, re-insert the DVD:
+  Eject then Insert in the web console, "Eject CD" then "Change CD..." in the tmux menu
+  (Ctrl-B m), or `./s10 eject` then `./s10 cd sol-10-u11-ga-sparc-dvd.iso` (by hand:
+  `vmctl eject` then `vmctl cd FILE` through `docker exec` or `container exec`). Then
+  mount it by hand in Solaris:
+
+  ```
+  mount -F hsfs -o ro /dev/dsk/c0t2d0s0 /cdrom
+  ```
+
 ### Session mode: run in the background, attach to the console
 
 `session` (or `session install`) runs QEMU in a tmux session inside the container, so
